@@ -1,10 +1,63 @@
 #include <iostream>
 #include "opencv2/opencv.hpp"
 #include <chrono>
+#include <pthread.h>
+#define NumberOfThreads 3
 using namespace std;
 using namespace cv;
 
+static std::vector<Mat> newBGR;
+static struct threadData{
+    cv::Mat  channel;
+    cv::Mat_<float>  kernel;
+    cv::Mat  newChannel;
 
+};
+
+void applyConvOnOneChannel(cv::Mat & channel, cv::Mat_<float> & kernel,cv::Mat & newChannel){
+
+    Mat_<float> flipped_kernel;
+    flip(kernel, flipped_kernel, -1);
+
+    const int dx = kernel.cols / 2;
+    const int dy = kernel.rows / 2;
+
+    for (long i = 0; i<channel.rows; i++)
+    {
+        for (long j = 0; j<channel.cols; j++)
+        {
+            float tmp = 0;
+
+
+            for (long k = 0; k<flipped_kernel.rows; k++)
+            {
+                for (long l = 0; l<flipped_kernel.cols; l++)
+                {
+
+                    int x = j - dx + l;
+                    int y = i - dy + k;
+
+                    if (x >= 0 && x < channel.cols && y >= 0 && y < channel.rows)
+                        //tmp += oldImage.at<float>(y, x) * flipped_kernel.at<float>(k, l);
+                        tmp+=(float)channel.at<uchar>(y,x)* flipped_kernel.at<float>(k, l);
+
+                }
+
+            }
+
+
+
+            newChannel.at<uchar>(i,j)=saturate_cast<uchar>(tmp);
+
+        }
+
+
+
+    }
+
+
+
+}
 
 
 
@@ -65,7 +118,25 @@ cv::Mat applyConv(cv::Mat & oldImage,cv::Mat_<float> & kernel){
     }
 
 
+void * channelFilter(void * threadArg){
 
+    //we will call the function which apply the conv on one channel
+    cv::Mat  channel;
+    cv::Mat_<float>  kernel;
+    cv::Mat  newChannel;
+
+    threadData *myData;
+
+    myData= (struct threadData *)threadArg;
+
+    channel = myData->channel;
+    kernel=myData->kernel;
+    newChannel=myData->newChannel;
+
+    applyConvOnOneChannel(channel,kernel,newChannel);
+
+    pthread_exit(NULL);
+}
 
 
 
@@ -92,7 +163,10 @@ int main() {
     //////////////////kernels definition finshed///////////////////
 
     Mat image = imread("/Users/josephdaoud/downloads/pexels-maxime-francis-2246476.jpg");
-    Mat sideBySide;
+
+
+
+
 
     if (image.empty()) {
         cout << "Image File "
@@ -105,13 +179,55 @@ int main() {
 
 
 
+    Mat newImage(image.rows,image.cols,image.type());
+
+
+
+    pthread_t threads[NumberOfThreads];
+    threadData threadDataArray[NumberOfThreads];
+
+    std::vector<Mat> BGR;
+    split(image, BGR);
+    split(newImage,newBGR);
+
+
+
+
+
+
+
+
     auto startime=std::chrono::high_resolution_clock::now();
-    cv::Mat filteredImage=applyConv(image, edgeDetection);
+
+    for (int i = 0; i < NumberOfThreads; ++i) {
+        threadDataArray[i].channel=BGR[i];
+        threadDataArray[i].kernel=edgeDetection;
+        threadDataArray[i].newChannel=newBGR[i];
+
+    }
+
+
+    for (int i = 0; i < NumberOfThreads; ++i) {
+        pthread_create(&threads[i],NULL,channelFilter,(void *)&threadDataArray[i]);
+
+    }
+    for (int i = 0; i < NumberOfThreads; ++i) {
+        pthread_join(threads[i],NULL);
+    }
+
+
+    merge(newBGR,newImage);
+
+
     auto endtime= chrono::high_resolution_clock::now();
     auto duration = duration_cast<std::chrono::milliseconds>(endtime - startime);
 
     cout<<"Total execution time in ms : "<<duration.count();
-    hconcat(image,filteredImage,sideBySide);
+
+
+
+    Mat sideBySide;
+    hconcat(image,newImage,sideBySide);
     imshow("iFilter", sideBySide);
 
 
